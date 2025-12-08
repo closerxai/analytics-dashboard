@@ -13,13 +13,17 @@ func Init() {
 	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
 }
 
-type Client struct{}
-
-func New() *Client {
-	return &Client{}
+type Client struct {
+	SecretKey string
 }
 
+func New(secret string) *Client {
+	return &Client{SecretKey: secret}
+}
+
+
 func (c *Client) GetRevenue() (int64, error) {
+	stripe.Key = c.SecretKey
 	params := &stripe.ChargeListParams{}
 	params.Limit = stripe.Int64(100)
 
@@ -39,6 +43,7 @@ func (c *Client) GetRevenue() (int64, error) {
 
 
 func (c *Client) GetRefunded() (int64, error) {
+	stripe.Key = c.SecretKey
 	params := &stripe.RefundListParams{}
 	params.Limit = stripe.Int64(100) // ✔ correct
 
@@ -54,6 +59,7 @@ func (c *Client) GetRefunded() (int64, error) {
 
 
 func (c *Client) GetDisputesLost() (int64, error) {
+	stripe.Key = c.SecretKey
 	params := &stripe.DisputeListParams{}
 	params.Limit = stripe.Int64(100) // ✔ correct
 

@@ -1,6 +1,9 @@
 package services
 
-import "backend/internal/stripe"
+import (
+	"fmt"
+	stripeclient "backend/clients"
+)
 
 type Analytics struct {
 	Revenue  int64 `json:"revenue"`
@@ -10,17 +13,24 @@ type Analytics struct {
 }
 
 type AnalyticsService struct {
-	client *stripeclient.Client
+	clients map[string]*stripeclient.Client
 }
 
-func NewAnalyticsService(c *stripeclient.Client) *AnalyticsService {
-	return &AnalyticsService{client: c}
+func NewAnalyticsService(c map[string]*stripeclient.Client) *AnalyticsService {
+	return &AnalyticsService{clients: c}
 }
 
-func (s *AnalyticsService) GetAnalytics() (*Analytics, error) {
-	revenue, _ := s.client.GetRevenue()
-	refunded, _ := s.client.GetRefunded()
-	disputes, _ := s.client.GetDisputesLost()
+func (s *AnalyticsService) GetAnalytics(product string) (*Analytics, error) {
+	
+	client := s.clients[product]
+	if client == nil {
+		return nil, fmt.Errorf("invalid product")
+	}
+
+	revenue, _ := client.GetRevenue()
+	refunded, _ := client.GetRefunded()
+	disputes, _ := client.GetDisputesLost()
+
 	profit := revenue - refunded - disputes
 
 	return &Analytics{

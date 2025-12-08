@@ -16,10 +16,17 @@ func NewAnalyticsHandler(s *services.AnalyticsService) *AnalyticsHandler {
 }
 
 func (h *AnalyticsHandler) GetAnalytics(c *gin.Context) {
-	data, err := h.srv.GetAnalytics()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch analytics"})
+	product := c.Query("product")
+	if product == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "product is required"})
 		return
 	}
+
+	data, err := h.srv.GetAnalytics(product)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, data)
 }

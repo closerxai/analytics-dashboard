@@ -2,21 +2,26 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
 	"backend/internal/handlers"
 	"backend/internal/services"
-	stripeclient "backend/internal/stripe"
+	stripeclient "backend/clients"
 )
 
 func main() {
 	godotenv.Load()
-	stripeclient.Init()
 
-	client := stripeclient.New()
-	srv := services.NewAnalyticsService(client)
+	stripeClients := map[string]*stripeclient.Client{
+		"maya":    stripeclient.New(os.Getenv("MAYA_STRIPE_KEY")),
+		"snowie":  stripeclient.New(os.Getenv("SNOWIE_STRIPE_KEY")),
+		"closerx": stripeclient.New(os.Getenv("CLOSERX_STRIPE_KEY")),
+	}
+
+	srv := services.NewAnalyticsService(stripeClients)
 	handler := handlers.NewAnalyticsHandler(srv)
 
 	r := gin.Default()
