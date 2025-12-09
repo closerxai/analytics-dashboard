@@ -38,7 +38,7 @@ func (c *Client) GetTotals(startDate, endDate string) (revenue int64, refunded i
 
 	stripe.Key = c.SecretKey
 
-	log.Printf("[Stripe] Fetching BalanceTransactions | start=%s end=%s", startDate, endDate)
+	log.Printf("[Stripe] Fetching BalanceTransactions for key %s | start=%s end=%s", c.SecretKey, startDate, endDate)
 
 	params := &stripe.BalanceTransactionListParams{}
 	params.Limit = stripe.Int64(1000) // large pages => fewer requests
@@ -73,11 +73,12 @@ func (c *Client) GetTotals(startDate, endDate string) (revenue int64, refunded i
 	}
 
 	if err := iter.Err(); err != nil {
-		log.Printf("[Stripe] ERROR reading balance transactions: %v", err)
+		log.Printf("[Stripe] ERROR reading balance transactions for key %s: %v", c.SecretKey, err)
 		return 0, 0, 0, err
 	}
 
-	log.Printf("[Stripe] Totals: revenue=%d refunded=%d disputes=%d",
+	log.Printf("[Stripe] Totals for key %s: revenue=%d refunded=%d disputes=%d",
+		c.SecretKey,
 		revenue, refunded, disputes)
 
 	return revenue, refunded, disputes, nil
@@ -87,9 +88,6 @@ func (c *Client) GetTotals(startDate, endDate string) (revenue int64, refunded i
 // PARALLEL WRAPPER (same API as before)
 // --------------------------------------------------------------
 func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, int64, error) {
-
-	log.Printf("[Stripe] Parallel fetch started | start=%s end=%s", startDate, endDate)
-
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -124,7 +122,7 @@ func endOfMonth(t time.Time) time.Time {
 
 func (c *Client) GetMonthlyStats(year int) ([]MonthlyStats, error) {
 
-	log.Printf("[Stripe] Monthly stats started | year=%d", year)
+	log.Printf("[Stripe] Monthly stats started for key %s | year=%d", c.SecretKey, year)
 
 	var results []MonthlyStats
 
@@ -135,8 +133,6 @@ func (c *Client) GetMonthlyStats(year int) ([]MonthlyStats, error) {
 
 		startStr := start.Format("2006-01-02")
 		endStr := end.Format("2006-01-02")
-
-		log.Printf("[Stripe] Fetch month=%s | %s → %s", start.Format("2006-01"), startStr, endStr)
 
 		revenue, refunded, disputes, err := c.GetTotals(startStr, endStr)
 		if err != nil {
