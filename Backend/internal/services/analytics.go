@@ -40,3 +40,41 @@ func (s *AnalyticsService) GetAnalytics(product string) (*Analytics, error) {
 		Profit:   profit,
 	}, nil
 }
+
+func (s *AnalyticsService) GetRevenue(product string) (int64, error) {
+	client := s.clients[product]
+	if client == nil {
+		return 0, fmt.Errorf("invalid product")
+	}
+	return client.GetRevenue()
+}
+
+func (s *AnalyticsService) GetRefunded(product string) (int64, error) {
+	client := s.clients[product]
+	if client == nil {
+		return 0, fmt.Errorf("invalid product")
+	}
+	return client.GetRefunded()
+}
+
+func (s *AnalyticsService) GetDisputes(product string) (int64, error) {
+	client := s.clients[product]
+	if client == nil {
+		return 0, fmt.Errorf("invalid product")
+	}
+	return client.GetDisputesLost()
+}
+
+func (s *AnalyticsService) GetProfit(product string) (int64, error) {
+	client := s.clients[product]
+	if client == nil {
+		return 0, fmt.Errorf("invalid product")
+	}
+
+	revenue, _ := client.GetRevenue()
+	refunded, _ := client.GetRefunded()
+	disputes, _ := client.GetDisputesLost()
+
+	return revenue - refunded - disputes, nil
+}
+

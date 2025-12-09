@@ -27,6 +27,10 @@ func main() {
 	r := gin.Default()
 
 	r.GET("/analytics", handler.GetAnalytics)
+	r.GET("/analytics/revenue", handler.GetRevenue)
+	r.GET("/analytics/refunded", handler.GetRefunded)
+	r.GET("/analytics/disputes", handler.GetDisputes)
+	r.GET("/analytics/profit", handler.GetProfit)
 
 	log.Println("Server running at :8080")
 	r.Run(":8080")
