@@ -136,19 +136,19 @@ func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, 
 	go func() {
 		defer wg.Done()
 		revenue, err1 = c.GetRevenue(startDate, endDate)
-		log.Printf("[Stripe] Revenue fetch done: %d", revenue)
+		log.Printf("[Stripe] Revenue fetch done for key %s: %d", c.SecretKey, revenue)
 	}()
 
 	go func() {
 		defer wg.Done()
 		refunded, err2 = c.GetRefunded(startDate, endDate)
-		log.Printf("[Stripe] Refund fetch done: %d", refunded)
+		log.Printf("[Stripe] Refund fetch done for key %s: %d", c.SecretKey, refunded)
 	}()
 
 	go func() {
 		defer wg.Done()
 		disputes, err3 = c.GetDisputesLost(startDate, endDate)
-		log.Printf("[Stripe] Disputes fetch done: %d", disputes)
+		log.Printf("[Stripe] Disputes fetch done for key %s: %d", c.SecretKey, disputes)
 	}()
 
 	wg.Wait()
@@ -163,7 +163,8 @@ func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, 
 		return 0, 0, 0, err3
 	}
 
-	log.Printf("[Stripe] Parallel totals | revenue=%d refunded=%d disputes=%d",
+	log.Printf("[Stripe] Parallel totals for key %s | revenue=%d refunded=%d disputes=%d",
+		c.SecretKey[len(c.SecretKey)-4:],
 		revenue, refunded, disputes)
 
 	return revenue, refunded, disputes, nil

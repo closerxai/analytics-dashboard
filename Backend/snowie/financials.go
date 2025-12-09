@@ -52,7 +52,7 @@ func GetFinancialStats(c *gin.Context) {
 
 	log.Printf("[Snowie] Request received | start_date=%s end_date=%s", startDate, endDate)
 
-	cacheKey := "closerx:" + startDate + ":" + endDate
+	cacheKey := "snowie:" + startDate + ":" + endDate
 
 	// 1. Try cache
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
@@ -92,6 +92,8 @@ func GetFinancialStats(c *gin.Context) {
 	}
 
 	total.Profit = total.Revenue - total.Refunded - total.DisputesLost
+	total.StartDate = startDate
+	total.EndDate = endDate
 
 	// 4. Write to cache (5 minutes)
 	b, _ := json.Marshal(total)
