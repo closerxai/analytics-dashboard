@@ -3,11 +3,10 @@ package closerx
 import (
 	stripeclient "backend/clients"
 	"backend/utils"
-	"net/http"
-	"os"
-
 	"encoding/json"
 	"log"
+	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -15,18 +14,19 @@ import (
 )
 
 type FinancialStats struct {
-	Revenue      int64 `json:"revenue"`
-	Refunded     int64 `json:"refunded"`
-	DisputesLost int64 `json:"disputes_lost"`
-	Profit       int64 `json:"profit"`
+	Revenue      int64  `json:"revenue"`
+	Refunded     int64  `json:"refunded"`
+	DisputesLost int64  `json:"disputes_lost"`
+	Profit       int64  `json:"profit"`
 	StartDate    string `json:"start_date"`
 	EndDate      string `json:"end_date"`
 }
 
-func fetchForAccount(key, startDate, endDate string, ch chan<- FinancialStats, errCh chan<- error) {
-	client := stripeclient.New(key)
+// Fetch totals for one Stripe account using Balance Transactions
+func fetchForAccount(secret, start, end string, ch chan<- FinancialStats, errCh chan<- error) {
+	client := stripeclient.New(secret)
 
-	r, f, d, err := client.FetchStatsInParallel(startDate, endDate)
+	r, f, d, err := client.GetTotals(start, end)
 	if err != nil {
 		errCh <- err
 		return
@@ -37,13 +37,13 @@ func fetchForAccount(key, startDate, endDate string, ch chan<- FinancialStats, e
 		Refunded:     f,
 		DisputesLost: d,
 		Profit:       r - f - d,
-		StartDate:    startDate,
-		EndDate:      endDate,
+		StartDate:    start,
+		EndDate:      end,
 	}
 }
 
 func GetFinancialStats(c *gin.Context) {
-	start := time.Now()
+	reqStart := time.Now()
 
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
@@ -52,27 +52,21 @@ func GetFinancialStats(c *gin.Context) {
 		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
 	}
 
-	log.Printf("[CloserX] Request received | start_date=%s end_date=%s", startDate, endDate)
+	log.Printf("[CloserX] Request | start=%s end=%s", startDate, endDate)
 
 	cacheKey := "closerx:" + startDate + ":" + endDate
 
-	// 1. Try cache
+	// Cache check
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
-		log.Printf("[CloserX] Cache HIT | key=%s", cacheKey)
-
+		log.Printf("[CloserX] Cache HIT → %s", cacheKey)
 		var data FinancialStats
 		json.Unmarshal([]byte(cached), &data)
-
-		log.Printf("[CloserX] Returning cached stats | profit=%d | duration=%s",
-			data.Profit, time.Since(start))
-
-		utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved (cache)", data)
+		utils.CustomResponse(c, http.StatusOK, true, "Financial stats (cache)", data)
 		return
 	}
 
-	log.Printf("[CloserX] Cache MISS | key=%s", cacheKey)
+	log.Printf("[CloserX] Cache MISS → %s", cacheKey)
 
-	// 2. Parallel fetch from Stripe keys
 	keys := []string{
 		os.Getenv("CLOSERX_STRIPE_KEY_1"),
 		os.Getenv("CLOSERX_STRIPE_KEY_2"),
@@ -81,53 +75,56 @@ func GetFinancialStats(c *gin.Context) {
 	statsCh := make(chan FinancialStats, len(keys))
 	errCh := make(chan error, len(keys))
 
-	log.Printf("[CloserX] Starting parallel Stripe fetch for %d keys", len(keys))
+	log.Printf("[CloserX] Fetching Stripe data for %d accounts", len(keys))
 
 	for _, key := range keys {
 		go func(k string) {
-			log.Printf("[CloserX] Fetching Stripe stats for key ending with ...%s", k[len(k)-4:])
+			safe := k[len(k)-4:]
+			log.Printf("[CloserX] Fetching account ...%s", safe)
 			fetchForAccount(k, startDate, endDate, statsCh, errCh)
 		}(key)
 	}
 
 	var total FinancialStats
 
-	// 3. Wait for results
 	for range keys {
 		select {
 		case s := <-statsCh:
-			log.Printf("[CloserX] Partial result | revenue=%d refunded=%d disputes=%d",
-				s.Revenue, s.Refunded, s.DisputesLost)
-
 			total.Revenue += s.Revenue
 			total.Refunded += s.Refunded
 			total.DisputesLost += s.DisputesLost
-
 		case err := <-errCh:
-			log.Printf("[CloserX] ERROR fetching Stripe stats: %v", err)
+			log.Printf("[CloserX] ERROR: %v", err)
 			utils.CustomResponse(c, http.StatusInternalServerError, false, err.Error(), nil)
 			return
 		}
 	}
 
-	total.Profit = total.Revenue - total.Refunded - total.DisputesLost
+	refAbs := utils.Abs64(total.Refunded)
+	dispAbs := utils.Abs64(total.DisputesLost)
+
+	total.Profit = total.Revenue - refAbs - dispAbs
+	total.Refunded = refAbs
+	total.DisputesLost = dispAbs
 	total.StartDate = startDate
 	total.EndDate = endDate
 
-	log.Printf("[CloserX] Final totals | revenue=%d refunded=%d disputes=%d profit=%d",
+	log.Printf("[CloserX] Totals | revenue=%d refunded=%d disputes=%d profit=%d",
 		total.Revenue, total.Refunded, total.DisputesLost, total.Profit)
 
-	// 4. Write to cache (5 minutes)
+	// Save to cache
 	b, _ := json.Marshal(total)
 	utils.Set(cacheKey, string(b), 5*time.Minute)
 
-	log.Printf("[CloserX] Cached result saved | key=%s | ttl=5m", cacheKey)
+	log.Printf("[CloserX] Saved cache | %s (ttl=5m)", cacheKey)
+	log.Printf("[CloserX] Request finished in %s", time.Since(reqStart))
 
-	// 5. Return response
-	log.Printf("[CloserX] Request completed in %s", time.Since(start))
 	utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved successfully", total)
 }
 
+// -----------------------
+// MONTHLY STATS (FAST)
+// -----------------------
 func GetMonthlyStats(c *gin.Context) {
 	yearStr := c.Query("year")
 	if yearStr == "" {
@@ -141,11 +138,11 @@ func GetMonthlyStats(c *gin.Context) {
 
 	cacheKey := "closerx_monthly:" + yearStr
 
-	// 1. Try cache
+	// Cache hit?
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
 		var data []stripeclient.MonthlyStats
 		json.Unmarshal([]byte(cached), &data)
-		utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved (cache)", data)
+		utils.CustomResponse(c, http.StatusOK, true, "Monthly stats (cache)", data)
 		return
 	}
 
@@ -154,56 +151,49 @@ func GetMonthlyStats(c *gin.Context) {
 		os.Getenv("CLOSERX_STRIPE_KEY_2"),
 	}
 
-	type result struct {
+	type monthlyResult struct {
 		stats []stripeclient.MonthlyStats
 		err   error
 	}
 
-	statsCh := make(chan result, len(keys))
+	resultCh := make(chan monthlyResult, len(keys))
 
-	// 2. Fetch both Stripe accounts in parallel
 	for _, key := range keys {
-		go func(secret string) {
-			client := stripeclient.New(secret)
-			data, e := client.GetMonthlyStats(year)
-			statsCh <- result{stats: data, err: e}
+		go func(k string) {
+			client := stripeclient.New(k)
+			stats, e := client.GetMonthlyStats(year)
+			resultCh <- monthlyResult{stats: stats, err: e}
 		}(key)
 	}
 
-	// 3. Merge data
+	// Merge results
 	var combined [12]stripeclient.MonthlyStats
 	first := true
 
 	for range keys {
-		res := <-statsCh
+		res := <-resultCh
 		if res.err != nil {
 			utils.CustomResponse(c, http.StatusInternalServerError, false, res.err.Error(), nil)
 			return
 		}
 
-		// Initialize months on first pass
 		if first {
-			for i := 0; i < 12; i++ {
-				combined[i] = res.stats[i]
-			}
+			copy(combined[:], res.stats)
 			first = false
 			continue
 		}
 
-		// Merge subsequent accounts
 		for i := 0; i < 12; i++ {
 			combined[i].Revenue += res.stats[i].Revenue
 			combined[i].Profit += res.stats[i].Profit
 		}
 	}
 
-	// Convert fixed array to slice
 	final := combined[:]
 
-	// 4. Cache for 30 minutes (graphs don’t need real-time updates)
+	// Cache for 30 minutes
 	b, _ := json.Marshal(final)
 	utils.Set(cacheKey, string(b), 30*time.Minute)
 
-	// 5. Return response
 	utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved successfully", final)
 }

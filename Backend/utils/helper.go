@@ -14,3 +14,11 @@ func ApplyDefaultMonth(startDate, endDate string) (string, string) {
 
 	return first.Format("2006-01-02"), last.Format("2006-01-02")
 }
+
+
+func Abs64(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
+}

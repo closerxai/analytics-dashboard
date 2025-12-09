@@ -3,9 +3,9 @@ package snowie
 import (
 	stripeclient "backend/clients"
 	"backend/utils"
+	"log"
 	"net/http"
 	"os"
-	"log"
 
 	"encoding/json"
 	"strconv"
@@ -15,10 +15,10 @@ import (
 )
 
 type FinancialStats struct {
-	Revenue      int64 `json:"revenue"`
-	Refunded     int64 `json:"refunded"`
-	DisputesLost int64 `json:"disputes_lost"`
-	Profit       int64 `json:"profit"`
+	Revenue      int64  `json:"revenue"`
+	Refunded     int64  `json:"refunded"`
+	DisputesLost int64  `json:"disputes_lost"`
+	Profit       int64  `json:"profit"`
 	StartDate    string `json:"start_date"`
 	EndDate      string `json:"end_date"`
 }
@@ -91,7 +91,12 @@ func GetFinancialStats(c *gin.Context) {
 		}
 	}
 
-	total.Profit = total.Revenue - total.Refunded - total.DisputesLost
+	refAbs := utils.Abs64(total.Refunded)
+	dispAbs := utils.Abs64(total.DisputesLost)
+
+	total.Profit = total.Revenue - refAbs - dispAbs
+	total.Refunded = refAbs
+	total.DisputesLost = dispAbs
 	total.StartDate = startDate
 	total.EndDate = endDate
 

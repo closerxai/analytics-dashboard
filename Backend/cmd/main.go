@@ -16,12 +16,15 @@ func main() {
 
 	closerxGroup := router.Group("/api/closerx")
 	closerxGroup.GET("/financials", closerx.GetFinancialStats)
+	closerxGroup.GET("/financials/graph", closerx.GetMonthlyStats)
 
 	mayaGroup := router.Group("/api/maya")
 	mayaGroup.GET("/financials", maya.GetFinancialStats)
+	mayaGroup.GET("/financials/graph", maya.GetMonthlyStats)
 
 	snowieGroup := router.Group("/api/snowie")
 	snowieGroup.GET("/financials", snowie.GetFinancialStats)
+	snowieGroup.GET("/financials/graph", snowie.GetMonthlyStats)
 
 	router.Run(":8080")
 }

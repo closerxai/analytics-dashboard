@@ -14,26 +14,28 @@ import (
 )
 
 type FinancialStats struct {
-	Revenue      int64 `json:"revenue"`
-	Refunded     int64 `json:"refunded"`
-	DisputesLost int64 `json:"disputes_lost"`
-	Profit       int64 `json:"profit"`
+	Revenue      int64  `json:"revenue"`
+	Refunded     int64  `json:"refunded"`
+	DisputesLost int64  `json:"disputes_lost"`
+	Profit       int64  `json:"profit"`
+	StartDate    string `json:"start_date"`
+	EndDate      string `json:"end_date"`
 }
 
-// Global client instance for Maya
 var client *stripeclient.Client
 
 func Init() {
-	key := os.Getenv("MAYA_STRIPE_KEY")
-	client = stripeclient.New(key)
+	secret := os.Getenv("MAYA_STRIPE_KEY")
+	client = stripeclient.New(secret)
 }
 
-// ⚡ Fetch stats in parallel using your new Client method
-func fetchStatsParallel(client *stripeclient.Client, startDate, endDate string) (int64, int64, int64, error) {
-	return client.FetchStatsInParallel(startDate, endDate)
-}
+// ------------------------------
+//       SINGLE ACCOUNT API
+// ------------------------------
 
 func GetFinancialStats(c *gin.Context) {
+	start := time.Now()
+
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
@@ -41,46 +43,61 @@ func GetFinancialStats(c *gin.Context) {
 		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
 	}
 
-	log.Printf("[Maya] Request received | start_date=%s end_date=%s", startDate, endDate)
+	log.Printf("[Maya] Request | start=%s end=%s", startDate, endDate)
 
 	if client == nil {
 		utils.CustomResponse(c, http.StatusInternalServerError, false, "Stripe client not initialized", nil)
 		return
 	}
 
-	// Cache key
 	cacheKey := "maya:" + startDate + ":" + endDate
 
-	// 1️⃣ Try cache
+	// 1️⃣ Cache check
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
+		log.Printf("[Maya] Cache HIT | %s", cacheKey)
+
 		var data FinancialStats
 		json.Unmarshal([]byte(cached), &data)
-
-		utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved (cache)", data)
+		utils.CustomResponse(c, http.StatusOK, true, "Financial stats (cache)", data)
 		return
 	}
 
-	// 2️⃣ Fetch in parallel using Stripe goroutines
-	revenue, refunded, disputesLost, err := fetchStatsParallel(client, startDate, endDate)
+	log.Printf("[Maya] Cache MISS | %s", cacheKey)
+
+	// 2️⃣ FAST Stripe balance transaction fetch
+	revenue, refunded, disputes, err := client.GetTotals(startDate, endDate)
 	if err != nil {
+		log.Printf("[Maya] ERROR fetch: %v", err)
 		utils.CustomResponse(c, http.StatusInternalServerError, false, "Failed to fetch financial data", nil)
 		return
 	}
+	
 
 	total := FinancialStats{
 		Revenue:      revenue,
 		Refunded:     refunded,
-		DisputesLost: disputesLost,
-		Profit:       revenue - refunded - disputesLost,
+		DisputesLost: disputes,
+		Profit:       revenue - refunded - disputes,
+		StartDate:    startDate,
+		EndDate:      endDate,
 	}
 
-	// 3️⃣ Cache for 5 minutes
-	b, _ := json.Marshal(total)
-	utils.Set(cacheKey, string(b), 5*time.Minute)
+	log.Printf("[Maya] Totals | revenue=%d refunded=%d disputes=%d profit=%d",
+		total.Revenue, total.Refunded, total.DisputesLost, total.Profit)
 
-	// 4️⃣ Return response
+	// 3️⃣ Cache
+	bytes, _ := json.Marshal(total)
+	utils.Set(cacheKey, string(bytes), 5*time.Minute)
+
+	log.Printf("[Maya] Cached | %s", cacheKey)
+	log.Printf("[Maya] Completed in %s", time.Since(start))
+
 	utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved successfully", total)
 }
+
+// ------------------------------
+//          MONTHLY STATS
+// ------------------------------
 
 func GetMonthlyStats(c *gin.Context) {
 	yearStr := c.Query("year")
@@ -101,26 +118,25 @@ func GetMonthlyStats(c *gin.Context) {
 
 	cacheKey := "maya_monthly:" + yearStr
 
-	// 1️⃣ Try cache
+	// 1️⃣ Cache check
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
 		var data []stripeclient.MonthlyStats
 		json.Unmarshal([]byte(cached), &data)
-
-		utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved (cache)", data)
+		utils.CustomResponse(c, http.StatusOK, true, "Monthly stats (cache)", data)
 		return
 	}
 
-	// 2️⃣ Fetch monthly stats (parallel in Stripe client)
-	monthly, err := client.GetMonthlyStats(year)
+	// 2️⃣ FAST monthly stats
+	monthlyStats, err := client.GetMonthlyStats(year)
 	if err != nil {
 		utils.CustomResponse(c, http.StatusInternalServerError, false, "Failed to fetch monthly stats", nil)
 		return
 	}
 
-	// 3️⃣ Cache for 30 minutes
-	b, _ := json.Marshal(monthly)
-	utils.Set(cacheKey, string(b), 30*time.Minute)
+	// 3️⃣ Cache
+	bytes, _ := json.Marshal(monthlyStats)
+	utils.Set(cacheKey, string(bytes), 30*time.Minute)
 
-	// 4️⃣ Return final data
-	utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved successfully", monthly)
+	// 4️⃣ Return response
+	utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved successfully", monthlyStats)
 }
