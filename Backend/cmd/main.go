@@ -1,37 +1,27 @@
 package main
 
 import (
-	"log"
-	"os"
+	"backend/closerx"
+	"backend/maya"
+	"backend/snowie"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-
-	"backend/internal/handlers"
-	"backend/internal/services"
-	stripeclient "backend/clients"
 )
 
 func main() {
 	godotenv.Load()
 
-	stripeClients := map[string]*stripeclient.Client{
-		"maya":    stripeclient.New(os.Getenv("MAYA_STRIPE_KEY")),
-		"snowie":  stripeclient.New(os.Getenv("SNOWIE_STRIPE_KEY")),
-		"closerx": stripeclient.New(os.Getenv("CLOSERX_STRIPE_KEY")),
-	}
+	router := gin.Default()
 
-	srv := services.NewAnalyticsService(stripeClients)
-	handler := handlers.NewAnalyticsHandler(srv)
+	closerxGroup := router.Group("/closerx")
+	closerxGroup.GET("/financials", closerx.GetFinancialStats)
 
-	r := gin.Default()
+	mayaGroup := router.Group("/maya")
+	mayaGroup.GET("/financials", maya.GetFinancialStats)
 
-	r.GET("/analytics", handler.GetAnalytics)
-	r.GET("/analytics/revenue", handler.GetRevenue)
-	r.GET("/analytics/refunded", handler.GetRefunded)
-	r.GET("/analytics/disputes", handler.GetDisputes)
-	r.GET("/analytics/profit", handler.GetProfit)
+	snowieGroup := router.Group("/snowie")
+	snowieGroup.GET("/financials", snowie.GetFinancialStats)
 
-	log.Println("Server running at :8080")
-	r.Run(":8080")
+	router.Run(":8080")
 }
