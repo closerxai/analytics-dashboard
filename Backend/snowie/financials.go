@@ -5,6 +5,7 @@ import (
 	"backend/utils"
 	"net/http"
 	"os"
+	"log"
 
 	"encoding/json"
 	"strconv"
@@ -18,28 +19,42 @@ type FinancialStats struct {
 	Refunded     int64 `json:"refunded"`
 	DisputesLost int64 `json:"disputes_lost"`
 	Profit       int64 `json:"profit"`
+	StartDate    string `json:"start_date"`
+	EndDate      string `json:"end_date"`
 }
 
-// Global client instance for Maya
-var client *stripeclient.Client
+func fetchForAccount(key, startDate, endDate string, ch chan<- FinancialStats, errCh chan<- error) {
+	client := stripeclient.New(key)
 
-func Init() {
-	key := os.Getenv("SNOWIE_STRIPE_KEY")
-	client = stripeclient.New(key)
-}
+	r, f, d, err := client.FetchStatsInParallel(startDate, endDate)
+	if err != nil {
+		errCh <- err
+		return
+	}
 
-// ⚡ Fetch stats in parallel using your new Client method
-func fetchStatsParallel(client *stripeclient.Client, startDate, endDate string) (int64, int64, int64, error) {
-	return client.FetchStatsInParallel(startDate, endDate)
+	ch <- FinancialStats{
+		Revenue:      r,
+		Refunded:     f,
+		DisputesLost: d,
+		Profit:       r - f - d,
+		StartDate:    startDate,
+		EndDate:      endDate,
+	}
 }
 
 func GetFinancialStats(c *gin.Context) {
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
-	cacheKey := "snowie:" + startDate + ":" + endDate
+	if startDate == "" || endDate == "" {
+		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
+	}
 
-	// 1️⃣ Try Redis cache
+	log.Printf("[Snowie] Request received | start_date=%s end_date=%s", startDate, endDate)
+
+	cacheKey := "closerx:" + startDate + ":" + endDate
+
+	// 1. Try cache
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
 		var data FinancialStats
 		json.Unmarshal([]byte(cached), &data)
@@ -48,25 +63,41 @@ func GetFinancialStats(c *gin.Context) {
 		return
 	}
 
-	// 3️⃣ Fetch in parallel using your FetchStatsInParallel method
-	revenue, refunded, disputes, err := fetchStatsParallel(client, startDate, endDate)
-	if err != nil {
-		utils.CustomResponse(c, http.StatusInternalServerError, false, "Failed to fetch financial data", nil)
-		return
+	// 2. Parallel fetch from Stripe keys
+	keys := []string{
+		os.Getenv("SNOWIE_STRIPE_KEY_1"),
+		os.Getenv("SNOWIE_STRIPE_KEY_2"),
 	}
 
-	total := FinancialStats{
-		Revenue:      revenue,
-		Refunded:     refunded,
-		DisputesLost: disputes,
-		Profit:       revenue - refunded - disputes,
+	statsCh := make(chan FinancialStats, len(keys))
+	errCh := make(chan error, len(keys))
+
+	for _, key := range keys {
+		go fetchForAccount(key, startDate, endDate, statsCh, errCh)
 	}
 
-	// 4️⃣ Cache result for 5 minutes
+	var total FinancialStats
+
+	// 3. Wait for results
+	for range keys {
+		select {
+		case s := <-statsCh:
+			total.Revenue += s.Revenue
+			total.Refunded += s.Refunded
+			total.DisputesLost += s.DisputesLost
+		case err := <-errCh:
+			utils.CustomResponse(c, http.StatusInternalServerError, false, err.Error(), nil)
+			return
+		}
+	}
+
+	total.Profit = total.Revenue - total.Refunded - total.DisputesLost
+
+	// 4. Write to cache (5 minutes)
 	b, _ := json.Marshal(total)
 	utils.Set(cacheKey, string(b), 5*time.Minute)
 
-	// 5️⃣ Return response
+	// 5. Return response
 	utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved successfully", total)
 }
 
@@ -75,16 +106,15 @@ func GetMonthlyStats(c *gin.Context) {
 	if yearStr == "" {
 		yearStr = "2025"
 	}
-
 	year, err := strconv.Atoi(yearStr)
 	if err != nil {
-		utils.CustomResponse(c, http.StatusBadRequest, false, "Invalid year", nil)
+		utils.CustomResponse(c, http.StatusBadRequest, false, "invalid year", nil)
 		return
 	}
 
-	cacheKey := "snowie_monthly:" + yearStr
+	cacheKey := "closerx_monthly:" + yearStr
 
-	// 1️⃣ Try cache
+	// 1. Try cache
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
 		var data []stripeclient.MonthlyStats
 		json.Unmarshal([]byte(cached), &data)
@@ -92,23 +122,61 @@ func GetMonthlyStats(c *gin.Context) {
 		return
 	}
 
-	// 2️⃣ Ensure Stripe client exists
-	if client == nil {
-		utils.CustomResponse(c, http.StatusInternalServerError, false, "Stripe client not initialized", nil)
-		return
+	keys := []string{
+		os.Getenv("SNOWIE_STRIPE_KEY_1"),
+		os.Getenv("SNOWIE_STRIPE_KEY_2"),
 	}
 
-	// 3️⃣ Fetch monthly stats (Stripe goroutine parallelized internally)
-	monthly, err := client.GetMonthlyStats(year)
-	if err != nil {
-		utils.CustomResponse(c, http.StatusInternalServerError, false, "Failed to fetch monthly stats", nil)
-		return
+	type result struct {
+		stats []stripeclient.MonthlyStats
+		err   error
 	}
 
-	// 4️⃣ Cache output for 30 minutes (recommended for graphs)
-	b, _ := json.Marshal(monthly)
+	statsCh := make(chan result, len(keys))
+
+	// 2. Fetch both Stripe accounts in parallel
+	for _, key := range keys {
+		go func(secret string) {
+			client := stripeclient.New(secret)
+			data, e := client.GetMonthlyStats(year)
+			statsCh <- result{stats: data, err: e}
+		}(key)
+	}
+
+	// 3. Merge data
+	var combined [12]stripeclient.MonthlyStats
+	first := true
+
+	for range keys {
+		res := <-statsCh
+		if res.err != nil {
+			utils.CustomResponse(c, http.StatusInternalServerError, false, res.err.Error(), nil)
+			return
+		}
+
+		// Initialize months on first pass
+		if first {
+			for i := 0; i < 12; i++ {
+				combined[i] = res.stats[i]
+			}
+			first = false
+			continue
+		}
+
+		// Merge subsequent accounts
+		for i := 0; i < 12; i++ {
+			combined[i].Revenue += res.stats[i].Revenue
+			combined[i].Profit += res.stats[i].Profit
+		}
+	}
+
+	// Convert fixed array to slice
+	final := combined[:]
+
+	// 4. Cache for 30 minutes (graphs don’t need real-time updates)
+	b, _ := json.Marshal(final)
 	utils.Set(cacheKey, string(b), 30*time.Minute)
 
-	// 5️⃣ Return results
-	utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved successfully", monthly)
+	// 5. Return response
+	utils.CustomResponse(c, http.StatusOK, true, "Monthly stats retrieved successfully", final)
 }

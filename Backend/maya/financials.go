@@ -4,6 +4,7 @@ import (
 	stripeclient "backend/clients"
 	"backend/utils"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -35,6 +36,12 @@ func fetchStatsParallel(client *stripeclient.Client, startDate, endDate string) 
 func GetFinancialStats(c *gin.Context) {
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
+
+	if startDate == "" || endDate == "" {
+		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
+	}
+
+	log.Printf("[Maya] Request received | start_date=%s end_date=%s", startDate, endDate)
 
 	if client == nil {
 		utils.CustomResponse(c, http.StatusInternalServerError, false, "Stripe client not initialized", nil)

@@ -14,13 +14,13 @@ func main() {
 
 	router := gin.Default()
 
-	closerxGroup := router.Group("/closerx")
+	closerxGroup := router.Group("/api/closerx")
 	closerxGroup.GET("/financials", closerx.GetFinancialStats)
 
-	mayaGroup := router.Group("/maya")
+	mayaGroup := router.Group("/api/maya")
 	mayaGroup.GET("/financials", maya.GetFinancialStats)
 
-	snowieGroup := router.Group("/snowie")
+	snowieGroup := router.Group("/api/snowie")
 	snowieGroup.GET("/financials", snowie.GetFinancialStats)
 
 	router.Run(":8080")

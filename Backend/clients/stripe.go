@@ -1,14 +1,15 @@
 package stripeclient
 
 import (
+	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/stripe/stripe-go/v80"
 	"github.com/stripe/stripe-go/v80/charge"
 	"github.com/stripe/stripe-go/v80/dispute"
 	"github.com/stripe/stripe-go/v80/refund"
-	"sync"
 )
 
 func Init() {
@@ -25,9 +26,13 @@ func New(secret string) *Client {
 
 func (c *Client) GetRevenue(startDate, endDate string) (int64, error) {
 	stripe.Key = c.SecretKey
+
+	log.Printf("[Stripe] Fetching Revenue | start=%s end=%s", startDate, endDate)
+
 	params := &stripe.ChargeListParams{}
 	params.Limit = stripe.Int64(100)
 	params.CreatedRange = &stripe.RangeQueryParams{}
+
 	if startDate != "" {
 		params.CreatedRange.GreaterThanOrEqual = parseTimestamp(startDate)
 	}
@@ -37,7 +42,7 @@ func (c *Client) GetRevenue(startDate, endDate string) (int64, error) {
 
 	iter := charge.List(params)
 
-	var total int64 = 0
+	var total int64
 
 	for iter.Next() {
 		ch := iter.Charge()
@@ -46,14 +51,17 @@ func (c *Client) GetRevenue(startDate, endDate string) (int64, error) {
 		}
 	}
 
+	log.Printf("[Stripe] Revenue Total = %d", total)
 	return total, iter.Err()
 }
 
 func (c *Client) GetRefunded(startDate, endDate string) (int64, error) {
 	stripe.Key = c.SecretKey
+
+	log.Printf("[Stripe] Fetching Refunds | start=%s end=%s", startDate, endDate)
+
 	params := &stripe.RefundListParams{}
 	params.Limit = stripe.Int64(100)
-
 	params.CreatedRange = &stripe.RangeQueryParams{}
 
 	if startDate != "" {
@@ -65,21 +73,24 @@ func (c *Client) GetRefunded(startDate, endDate string) (int64, error) {
 
 	iter := refund.List(params)
 
-	var total int64 = 0
+	var total int64
+
 	for iter.Next() {
-		total += iter.Refund().Amount
+		r := iter.Refund()
+		total += r.Amount
 	}
 
+	log.Printf("[Stripe] Refund Total = %d", total)
 	return total, iter.Err()
 }
 
 func (c *Client) GetDisputesLost(startDate, endDate string) (int64, error) {
 	stripe.Key = c.SecretKey
 
+	log.Printf("[Stripe] Fetching DisputesLost | start=%s end=%s", startDate, endDate)
+
 	params := &stripe.DisputeListParams{}
 	params.Limit = stripe.Int64(100)
-
-	// Proper date range filtering using CreatedRange
 	params.CreatedRange = &stripe.RangeQueryParams{}
 
 	if startDate != "" {
@@ -92,6 +103,7 @@ func (c *Client) GetDisputesLost(startDate, endDate string) (int64, error) {
 	iter := dispute.List(params)
 
 	var total int64
+
 	for iter.Next() {
 		d := iter.Dispute()
 		if d.Status == stripe.DisputeStatusLost {
@@ -99,19 +111,22 @@ func (c *Client) GetDisputesLost(startDate, endDate string) (int64, error) {
 		}
 	}
 
+	log.Printf("[Stripe] DisputesLost Total = %d", total)
 	return total, iter.Err()
 }
 
-// Helper function to convert date string to Unix timestamp
 func parseTimestamp(date string) int64 {
 	t, err := time.Parse("2006-01-02", date)
 	if err != nil {
+		log.Printf("[Stripe] WARN: invalid date '%s'", date)
 		return 0
 	}
 	return t.Unix()
 }
 
 func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, int64, error) {
+	log.Printf("[Stripe] Parallel fetch started | start=%s end=%s", startDate, endDate)
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 
@@ -121,16 +136,19 @@ func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, 
 	go func() {
 		defer wg.Done()
 		revenue, err1 = c.GetRevenue(startDate, endDate)
+		log.Printf("[Stripe] Revenue fetch done: %d", revenue)
 	}()
 
 	go func() {
 		defer wg.Done()
 		refunded, err2 = c.GetRefunded(startDate, endDate)
+		log.Printf("[Stripe] Refund fetch done: %d", refunded)
 	}()
 
 	go func() {
 		defer wg.Done()
 		disputes, err3 = c.GetDisputesLost(startDate, endDate)
+		log.Printf("[Stripe] Disputes fetch done: %d", disputes)
 	}()
 
 	wg.Wait()
@@ -145,49 +163,55 @@ func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, 
 		return 0, 0, 0, err3
 	}
 
+	log.Printf("[Stripe] Parallel totals | revenue=%d refunded=%d disputes=%d",
+		revenue, refunded, disputes)
+
 	return revenue, refunded, disputes, nil
 }
 
-
 type MonthlyStats struct {
-	Month        string `json:"month"`  // "2024-01"
-	Revenue      int64  `json:"revenue"`
-	Profit       int64  `json:"profit"`
+	Month   string `json:"month"`
+	Revenue int64  `json:"revenue"`
+	Profit  int64  `json:"profit"`
 }
 
-
-// Get the first day of the month (YYYY-MM)
 func firstOfMonth(year int, month time.Month) time.Time {
 	return time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
 }
 
-// Get the last day of month
 func endOfMonth(t time.Time) time.Time {
-	return t.AddDate(0, 1, 0).Add(-time.Second) // last second of month
+	return t.AddDate(0, 1, 0).Add(-time.Second)
 }
 
-
 func (c *Client) GetMonthlyStats(year int) ([]MonthlyStats, error) {
+	log.Printf("[Stripe] Monthly stats fetch started | year=%d", year)
+
 	var results []MonthlyStats
 
-	for month := 1; month <= 12; month++ {
-		start := firstOfMonth(year, time.Month(month))
+	for m := 1; m <= 12; m++ {
+		start := firstOfMonth(year, time.Month(m))
 		end := endOfMonth(start)
 
 		startStr := start.Format("2006-01-02")
 		endStr := end.Format("2006-01-02")
 
-		// Use your fast parallel fetch
+		log.Printf("[Stripe] Fetching month=%s | start=%s end=%s",
+			start.Format("2006-01"), startStr, endStr)
+
 		revenue, refunded, disputes, err := c.FetchStatsInParallel(startStr, endStr)
 		if err != nil {
+			log.Printf("[Stripe] ERROR month=%s: %v", start.Format("2006-01"), err)
 			return nil, err
 		}
 
 		stats := MonthlyStats{
-			Month:        start.Format("2006-01"), // graph-friendly
-			Revenue:      revenue,
-			Profit:       revenue - refunded - disputes,
+			Month:   start.Format("2006-01"),
+			Revenue: revenue,
+			Profit:  revenue - refunded - disputes,
 		}
+
+		log.Printf("[Stripe] Month=%s totals | revenue=%d profit=%d",
+			stats.Month, stats.Revenue, stats.Profit)
 
 		results = append(results, stats)
 	}

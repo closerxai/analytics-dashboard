@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"encoding/json"
+	"log"
 	"strconv"
 	"time"
 
@@ -18,6 +19,8 @@ type FinancialStats struct {
 	Refunded     int64 `json:"refunded"`
 	DisputesLost int64 `json:"disputes_lost"`
 	Profit       int64 `json:"profit"`
+	StartDate    string `json:"start_date"`
+	EndDate      string `json:"end_date"`
 }
 
 func fetchForAccount(key, startDate, endDate string, ch chan<- FinancialStats, errCh chan<- error) {
@@ -34,23 +37,40 @@ func fetchForAccount(key, startDate, endDate string, ch chan<- FinancialStats, e
 		Refunded:     f,
 		DisputesLost: d,
 		Profit:       r - f - d,
+		StartDate:    startDate,
+		EndDate:      endDate,
 	}
 }
 
 func GetFinancialStats(c *gin.Context) {
+	start := time.Now()
+
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
+
+	if startDate == "" || endDate == "" {
+		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
+	}
+
+	log.Printf("[CloserX] Request received | start_date=%s end_date=%s", startDate, endDate)
 
 	cacheKey := "closerx:" + startDate + ":" + endDate
 
 	// 1. Try cache
 	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
+		log.Printf("[CloserX] Cache HIT | key=%s", cacheKey)
+
 		var data FinancialStats
 		json.Unmarshal([]byte(cached), &data)
+
+		log.Printf("[CloserX] Returning cached stats | profit=%d | duration=%s",
+			data.Profit, time.Since(start))
 
 		utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved (cache)", data)
 		return
 	}
+
+	log.Printf("[CloserX] Cache MISS | key=%s", cacheKey)
 
 	// 2. Parallel fetch from Stripe keys
 	keys := []string{
@@ -61,8 +81,13 @@ func GetFinancialStats(c *gin.Context) {
 	statsCh := make(chan FinancialStats, len(keys))
 	errCh := make(chan error, len(keys))
 
+	log.Printf("[CloserX] Starting parallel Stripe fetch for %d keys", len(keys))
+
 	for _, key := range keys {
-		go fetchForAccount(key, startDate, endDate, statsCh, errCh)
+		go func(k string) {
+			log.Printf("[CloserX] Fetching Stripe stats for key ending with ...%s", k[len(k)-4:])
+			fetchForAccount(k, startDate, endDate, statsCh, errCh)
+		}(key)
 	}
 
 	var total FinancialStats
@@ -71,22 +96,35 @@ func GetFinancialStats(c *gin.Context) {
 	for range keys {
 		select {
 		case s := <-statsCh:
+			log.Printf("[CloserX] Partial result | revenue=%d refunded=%d disputes=%d",
+				s.Revenue, s.Refunded, s.DisputesLost)
+
 			total.Revenue += s.Revenue
 			total.Refunded += s.Refunded
 			total.DisputesLost += s.DisputesLost
+
 		case err := <-errCh:
+			log.Printf("[CloserX] ERROR fetching Stripe stats: %v", err)
 			utils.CustomResponse(c, http.StatusInternalServerError, false, err.Error(), nil)
 			return
 		}
 	}
 
 	total.Profit = total.Revenue - total.Refunded - total.DisputesLost
+	total.StartDate = startDate
+	total.EndDate = endDate
+
+	log.Printf("[CloserX] Final totals | revenue=%d refunded=%d disputes=%d profit=%d",
+		total.Revenue, total.Refunded, total.DisputesLost, total.Profit)
 
 	// 4. Write to cache (5 minutes)
 	b, _ := json.Marshal(total)
 	utils.Set(cacheKey, string(b), 5*time.Minute)
 
+	log.Printf("[CloserX] Cached result saved | key=%s | ttl=5m", cacheKey)
+
 	// 5. Return response
+	log.Printf("[CloserX] Request completed in %s", time.Since(start))
 	utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved successfully", total)
 }
 
