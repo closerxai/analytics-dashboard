@@ -22,3 +22,11 @@ func Abs64(n int64) int64 {
 	}
 	return n
 }
+
+
+func BoolToInt64(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}

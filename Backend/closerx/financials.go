@@ -13,37 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type FinancialStats struct {
-	Revenue      int64  `json:"revenue"`
-	Refunded     int64  `json:"refunded"`
-	DisputesLost int64  `json:"disputes_lost"`
-	Profit       int64  `json:"profit"`
-	StartDate    string `json:"start_date"`
-	EndDate      string `json:"end_date"`
-}
-
-// Fetch totals for one Stripe account using Balance Transactions
-func fetchForAccount(secret, start, end string, ch chan<- FinancialStats, errCh chan<- error) {
-	client := stripeclient.New(secret)
-
-	r, f, d, err := client.GetTotals(start, end)
-	if err != nil {
-		errCh <- err
-		return
-	}
-
-	ch <- FinancialStats{
-		Revenue:      r,
-		Refunded:     f,
-		DisputesLost: d,
-		Profit:       r - f - d,
-		StartDate:    start,
-		EndDate:      end,
-	}
-}
-
 func GetFinancialStats(c *gin.Context) {
-	reqStart := time.Now()
+
+	start := time.Now()
 
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
@@ -52,74 +24,77 @@ func GetFinancialStats(c *gin.Context) {
 		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
 	}
 
-	log.Printf("[CloserX] Request | start=%s end=%s", startDate, endDate)
-
-	cacheKey := "closerx:" + startDate + ":" + endDate
-
-	// Cache check
-	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
-		log.Printf("[CloserX] Cache HIT → %s", cacheKey)
-		var data FinancialStats
-		json.Unmarshal([]byte(cached), &data)
-		utils.CustomResponse(c, http.StatusOK, true, "Financial stats (cache)", data)
-		return
-	}
-
-	log.Printf("[CloserX] Cache MISS → %s", cacheKey)
-
 	keys := []string{
 		os.Getenv("CLOSERX_STRIPE_KEY_1"),
 		os.Getenv("CLOSERX_STRIPE_KEY_2"),
 	}
 
-	statsCh := make(chan FinancialStats, len(keys))
-	errCh := make(chan error, len(keys))
+	type resultMsg struct {
+		ia  *stripeclient.IAResult
+		err error
+	}
 
-	log.Printf("[CloserX] Fetching Stripe data for %d accounts", len(keys))
+	ch := make(chan resultMsg, len(keys))
 
+	// -------------------------------------------------
+	// PARALLEL FETCH (PER ACCOUNT)
+	// -------------------------------------------------
 	for _, key := range keys {
-		go func(k string) {
-			safe := k[len(k)-4:]
-			log.Printf("[CloserX] Fetching account ...%s", safe)
-			fetchForAccount(k, startDate, endDate, statsCh, errCh)
+		go func(secret string) {
+			client := stripeclient.New(secret)
+			ia, err := client.GetInvoiceBasedIA(startDate, endDate)
+			ch <- resultMsg{ia: ia, err: err}
 		}(key)
 	}
 
-	var total FinancialStats
+	// -------------------------------------------------
+	// FINAL MERGED RESULT
+	// -------------------------------------------------
+	final := &stripeclient.IAResult{
+		Subscriptions: map[string]*stripeclient.Bucket{},
+		Credits:       map[string]*stripeclient.Bucket{},
+		Others:        map[string]*stripeclient.Bucket{},
+	}
 
-	for range keys {
-		select {
-		case s := <-statsCh:
-			total.Revenue += s.Revenue
-			total.Refunded += s.Refunded
-			total.DisputesLost += s.DisputesLost
-		case err := <-errCh:
-			log.Printf("[CloserX] ERROR: %v", err)
-			utils.CustomResponse(c, http.StatusInternalServerError, false, err.Error(), nil)
-			return
+	merge := func(dst, src map[string]*stripeclient.Bucket) {
+		for price, b := range src {
+			if _, ok := dst[price]; !ok {
+				dst[price] = &stripeclient.Bucket{}
+			}
+			dst[price].Count += b.Count
+			dst[price].Revenue += b.Revenue
+			dst[price].Refunded += b.Refunded
+			dst[price].Disputes += b.Disputes
+			dst[price].Profit += b.Profit
 		}
 	}
 
-	refAbs := utils.Abs64(total.Refunded)
-	dispAbs := utils.Abs64(total.DisputesLost)
+	// -------------------------------------------------
+	// COLLECT
+	// -------------------------------------------------
+	for i := 0; i < len(keys); i++ {
+		res := <-ch
+		if res.err != nil {
+			utils.CustomResponse(c, http.StatusInternalServerError, false, res.err.Error(), nil)
+			return
+		}
 
-	total.Profit = total.Revenue - refAbs - dispAbs
-	total.Refunded = refAbs
-	total.DisputesLost = dispAbs
-	total.StartDate = startDate
-	total.EndDate = endDate
+		merge(final.Subscriptions, res.ia.Subscriptions)
+		merge(final.Credits, res.ia.Credits)
+		merge(final.Others, res.ia.Others)
+	}
 
-	log.Printf("[CloserX] Totals | revenue=%d refunded=%d disputes=%d profit=%d",
-		total.Revenue, total.Refunded, total.DisputesLost, total.Profit)
+	log.Printf("[CloserX] IA merged in %s", time.Since(start))
 
-	// Save to cache
-	b, _ := json.Marshal(total)
-	utils.Set(cacheKey, string(b), 5*time.Minute)
+	formatted := stripeclient.FormatIAResponse(final)
 
-	log.Printf("[CloserX] Saved cache | %s (ttl=5m)", cacheKey)
-	log.Printf("[CloserX] Request finished in %s", time.Since(reqStart))
-
-	utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved successfully", total)
+	utils.CustomResponse(
+		c,
+		http.StatusOK,
+		true,
+		"Invoice-based financial stats (price-level merged)",
+		formatted,
+	)
 }
 
 // -----------------------

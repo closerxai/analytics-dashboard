@@ -1,13 +1,19 @@
 package stripeclient
 
 import (
+	"fmt"
 	"log"
 	"os"
-	"sync"
+	"strings"
 	"time"
 
-	"github.com/stripe/stripe-go/v80"
-	"github.com/stripe/stripe-go/v80/balancetransaction"
+	"backend/utils"
+
+	"github.com/stripe/stripe-go/v84"
+	"github.com/stripe/stripe-go/v84/balancetransaction"
+	"github.com/stripe/stripe-go/v84/creditnote"
+	"github.com/stripe/stripe-go/v84/dispute"
+	"github.com/stripe/stripe-go/v84/invoice"
 )
 
 func Init() {
@@ -85,25 +91,6 @@ func (c *Client) GetTotals(startDate, endDate string) (revenue int64, refunded i
 }
 
 // --------------------------------------------------------------
-// PARALLEL WRAPPER (same API as before)
-// --------------------------------------------------------------
-func (c *Client) FetchStatsInParallel(startDate, endDate string) (int64, int64, int64, error) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	var revenue, refunded, disputes int64
-	var err error
-
-	go func() {
-		defer wg.Done()
-		revenue, refunded, disputes, err = c.GetTotals(startDate, endDate)
-	}()
-
-	wg.Wait()
-	return revenue, refunded, disputes, err
-}
-
-// --------------------------------------------------------------
 // MONTHLY STATS (now super fast)
 // --------------------------------------------------------------
 type MonthlyStats struct {
@@ -147,4 +134,288 @@ func (c *Client) GetMonthlyStats(year int) ([]MonthlyStats, error) {
 	}
 
 	return results, nil
+}
+
+type Bucket struct {
+	Count    int64
+	Revenue  int64 // cents
+	Refunded int64
+	Disputes int64
+	Profit   int64
+}
+
+type IAResult struct {
+	Subscriptions map[string]*Bucket
+	Credits       map[string]*Bucket
+	Others        map[string]*Bucket
+}
+
+func initBucket(m map[string]*Bucket, key string) {
+	if _, ok := m[key]; !ok {
+		m[key] = &Bucket{}
+	}
+}
+
+func (c *Client) GetInvoiceBasedIA(startDate, endDate string) (*IAResult, error) {
+
+	stripe.Key = c.SecretKey
+
+	result := &IAResult{
+		Subscriptions: map[string]*Bucket{},
+		Credits:       map[string]*Bucket{},
+		Others:        map[string]*Bucket{},
+	}
+
+	// -------------------------------------------------
+	// 1️⃣ INVOICES = REVENUE
+	// -------------------------------------------------
+	ip := &stripe.InvoiceListParams{
+		Status: stripe.String("paid"),
+	}
+	ip.Limit = stripe.Int64(1000)
+	ip.AddExpand("data.lines")
+
+	if startDate != "" {
+		ip.CreatedRange = &stripe.RangeQueryParams{
+			GreaterThanOrEqual: parseTimestamp(startDate),
+		}
+	}
+	if endDate != "" {
+		if ip.CreatedRange == nil {
+			ip.CreatedRange = &stripe.RangeQueryParams{}
+		}
+		ip.CreatedRange.LesserThanOrEqual = parseTimestamp(endDate)
+	}
+
+	invIter := invoice.List(ip)
+
+	for invIter.Next() {
+		inv := invIter.Invoice()
+
+		for _, line := range inv.Lines.Data {
+
+			amount := line.Amount // cents
+			key := fmt.Sprintf("%.2f", float64(amount)/100)
+
+			desc := strings.ToLower(line.Description)
+
+			isSubscription := inv.BillingReason == stripe.InvoiceBillingReasonSubscriptionCycle &&
+								line.Pricing != nil &&
+								line.Pricing.PriceDetails != nil
+
+
+			// ---- SUBSCRIPTIONS ----
+			if isSubscription {
+				initBucket(result.Subscriptions, key)
+				b := result.Subscriptions[key]
+				b.Count++
+				b.Revenue += amount
+				continue
+			}
+
+			// ---- CREDITS ----
+			if strings.Contains(desc, "credit") {
+				initBucket(result.Credits, key)
+				b := result.Credits[key]
+				b.Count++
+				b.Revenue += amount
+				continue
+			}
+
+			// ---- OTHERS ----
+			initBucket(result.Others, key)
+			b := result.Others[key]
+			b.Count++
+			b.Revenue += amount
+		}
+	}
+
+	if err := invIter.Err(); err != nil {
+		return nil, err
+	}
+
+	// -------------------------------------------------
+	// 2️⃣ CREDIT NOTES = REFUNDS
+	// -------------------------------------------------
+	cnp := &stripe.CreditNoteListParams{}
+	cnp.Limit = stripe.Int64(1000)
+
+	if startDate != "" {
+		cnp.CreatedRange = &stripe.RangeQueryParams{
+			GreaterThanOrEqual: parseTimestamp(startDate),
+		}
+	}
+
+	cnIter := creditnote.List(cnp)
+
+	for cnIter.Next() {
+		cn := cnIter.CreditNote()
+
+		for _, line := range cn.Lines.Data {
+			amount := utils.Abs64(line.Amount)
+			key := fmt.Sprintf("%.2f", float64(amount)/100)
+
+			for _, section := range []map[string]*Bucket{
+				result.Subscriptions,
+				result.Credits,
+				result.Others,
+			} {
+				if b, ok := section[key]; ok {
+					b.Refunded += amount
+					break
+				}
+			}
+		}
+	}
+
+	if err := cnIter.Err(); err != nil {
+		return nil, err
+	}
+
+	// -------------------------------------------------
+	// 3️⃣ DISPUTES (via Charges)
+	// -------------------------------------------------
+	dp := &stripe.DisputeListParams{}
+	dp.Limit = stripe.Int64(1000)
+
+	if startDate != "" {
+		dp.CreatedRange = &stripe.RangeQueryParams{
+			GreaterThanOrEqual: parseTimestamp(startDate),
+		}
+	}
+
+	iter := dispute.List(dp)
+
+	for iter.Next() {
+		d := iter.Dispute()
+
+		amount := d.Amount
+		key := fmt.Sprintf("%.2f", float64(amount)/100)
+
+		for _, section := range []map[string]*Bucket{
+			result.Subscriptions,
+			result.Credits,
+			result.Others,
+		} {
+			if b, ok := section[key]; ok {
+				b.Disputes += amount
+				break
+			}
+		}
+	}
+
+	// -------------------------------------------------
+	// 4️⃣ PROFIT
+	// -------------------------------------------------
+	for _, section := range []map[string]*Bucket{
+		result.Subscriptions,
+		result.Credits,
+		result.Others,
+	} {
+		for _, b := range section {
+			b.Profit = b.Revenue - b.Refunded - b.Disputes
+		}
+	}
+
+	return result, nil
+}
+
+type Metric struct {
+	Count int64 `json:"count"`
+	Total int64 `json:"total"`
+}
+
+type Totals struct {
+	Revenue  Metric `json:"revenue"`
+	Refunded Metric `json:"refunded"`
+	Disputed Metric `json:"disputed"`
+	Profit   Metric `json:"profit"`
+}
+
+type PriceBreakdown struct {
+	Revenue  Metric `json:"revenue"`
+	Refunded Metric `json:"refunded"`
+	Disputed Metric `json:"disputed"`
+	Profit   Metric `json:"profit"`
+}
+
+type Section struct {
+	Total  Totals                         `json:"total"`
+	Prices map[string]PriceBreakdown      `json:"prices"`
+}
+
+type IAResponse struct {
+	Total         Totals  `json:"total"`
+	Subscriptions Section `json:"subscriptions"`
+	Credits       Section `json:"credits"`
+	Others        Section `json:"others"`
+}
+
+
+func FormatIAResponse(ia *IAResult) IAResponse {
+
+	resp := IAResponse{
+		Subscriptions: Section{Prices: map[string]PriceBreakdown{}},
+		Credits:       Section{Prices: map[string]PriceBreakdown{}},
+		Others:        Section{Prices: map[string]PriceBreakdown{}},
+	}
+
+	apply := func(src map[string]*Bucket, section *Section) {
+		for price, b := range src {
+
+			// profit count == revenue count (derived metric)
+			profitCount := b.Count
+
+			section.Prices[price] = PriceBreakdown{
+				Revenue: Metric{
+					Count: b.Count,
+					Total: b.Revenue,
+				},
+				Refunded: Metric{
+					Count: utils.BoolToInt64(b.Refunded > 0),
+					Total: b.Refunded,
+				},
+				Disputed: Metric{
+					Count: utils.BoolToInt64(b.Disputes > 0),
+					Total: b.Disputes,
+				},
+				Profit: Metric{
+					Count: profitCount,
+					Total: b.Profit,
+				},
+			}
+
+			// ---- section totals ----
+			section.Total.Revenue.Count += b.Count
+			section.Total.Revenue.Total += b.Revenue
+
+			section.Total.Refunded.Count += utils.BoolToInt64(b.Refunded > 0)
+			section.Total.Refunded.Total += b.Refunded
+
+			section.Total.Disputed.Count += utils.BoolToInt64(b.Disputes > 0)
+			section.Total.Disputed.Total += b.Disputes
+
+			section.Total.Profit.Count += profitCount
+			section.Total.Profit.Total += b.Profit
+
+			// ---- global totals ----
+			resp.Total.Revenue.Count += b.Count
+			resp.Total.Revenue.Total += b.Revenue
+
+			resp.Total.Refunded.Count += utils.BoolToInt64(b.Refunded > 0)
+			resp.Total.Refunded.Total += b.Refunded
+
+			resp.Total.Disputed.Count += utils.BoolToInt64(b.Disputes > 0)
+			resp.Total.Disputed.Total += b.Disputes
+
+			resp.Total.Profit.Count += profitCount
+			resp.Total.Profit.Total += b.Profit
+		}
+	}
+
+	apply(ia.Subscriptions, &resp.Subscriptions)
+	apply(ia.Credits, &resp.Credits)
+	apply(ia.Others, &resp.Others)
+
+	return resp
 }

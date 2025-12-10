@@ -23,26 +23,8 @@ type FinancialStats struct {
 	EndDate      string `json:"end_date"`
 }
 
-func fetchForAccount(key, startDate, endDate string, ch chan<- FinancialStats, errCh chan<- error) {
-	client := stripeclient.New(key)
-
-	r, f, d, err := client.FetchStatsInParallel(startDate, endDate)
-	if err != nil {
-		errCh <- err
-		return
-	}
-
-	ch <- FinancialStats{
-		Revenue:      r,
-		Refunded:     f,
-		DisputesLost: d,
-		Profit:       r - f - d,
-		StartDate:    startDate,
-		EndDate:      endDate,
-	}
-}
-
 func GetFinancialStats(c *gin.Context) {
+
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
@@ -50,62 +32,68 @@ func GetFinancialStats(c *gin.Context) {
 		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
 	}
 
-	log.Printf("[Snowie] Request received | start_date=%s end_date=%s", startDate, endDate)
+	log.Printf("[Snowie] IA request | %s → %s", startDate, endDate)
 
-	cacheKey := "snowie:" + startDate + ":" + endDate
-
-	// 1. Try cache
-	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
-		var data FinancialStats
-		json.Unmarshal([]byte(cached), &data)
-
-		utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved (cache)", data)
-		return
-	}
-
-	// 2. Parallel fetch from Stripe keys
 	keys := []string{
 		os.Getenv("SNOWIE_STRIPE_KEY_1"),
 		os.Getenv("SNOWIE_STRIPE_KEY_2"),
 	}
 
-	statsCh := make(chan FinancialStats, len(keys))
-	errCh := make(chan error, len(keys))
-
-	for _, key := range keys {
-		go fetchForAccount(key, startDate, endDate, statsCh, errCh)
+	type msg struct {
+		ia  *stripeclient.IAResult
+		err error
 	}
 
-	var total FinancialStats
+	ch := make(chan msg, len(keys))
 
-	// 3. Wait for results
-	for range keys {
-		select {
-		case s := <-statsCh:
-			total.Revenue += s.Revenue
-			total.Refunded += s.Refunded
-			total.DisputesLost += s.DisputesLost
-		case err := <-errCh:
-			utils.CustomResponse(c, http.StatusInternalServerError, false, err.Error(), nil)
-			return
+	// -------- parallel fetch --------
+	for _, key := range keys {
+		go func(secret string) {
+			client := stripeclient.New(secret)
+			ia, err := client.GetInvoiceBasedIA(startDate, endDate)
+			ch <- msg{ia: ia, err: err}
+		}(key)
+	}
+
+	// -------- merged result --------
+	final := &stripeclient.IAResult{
+		Subscriptions: map[string]*stripeclient.Bucket{},
+		Credits:       map[string]*stripeclient.Bucket{},
+		Others:        map[string]*stripeclient.Bucket{},
+	}
+
+	merge := func(dst, src map[string]*stripeclient.Bucket) {
+		for price, b := range src {
+			if _, ok := dst[price]; !ok {
+				dst[price] = &stripeclient.Bucket{}
+			}
+			dst[price].Count += b.Count
+			dst[price].Revenue += b.Revenue
+			dst[price].Refunded += b.Refunded
+			dst[price].Disputes += b.Disputes
+			dst[price].Profit += b.Profit
 		}
 	}
 
-	refAbs := utils.Abs64(total.Refunded)
-	dispAbs := utils.Abs64(total.DisputesLost)
+	// -------- collect --------
+	for i := 0; i < len(keys); i++ {
+		res := <-ch
+		if res.err != nil {
+			utils.CustomResponse(c, http.StatusInternalServerError, false, res.err.Error(), nil)
+			return
+		}
+		merge(final.Subscriptions, res.ia.Subscriptions)
+		merge(final.Credits, res.ia.Credits)
+		merge(final.Others, res.ia.Others)
+	}
 
-	total.Profit = total.Revenue - refAbs - dispAbs
-	total.Refunded = refAbs
-	total.DisputesLost = dispAbs
-	total.StartDate = startDate
-	total.EndDate = endDate
-
-	// 4. Write to cache (5 minutes)
-	b, _ := json.Marshal(total)
-	utils.Set(cacheKey, string(b), 5*time.Minute)
-
-	// 5. Return response
-	utils.CustomResponse(c, http.StatusOK, true, "Financial stats retrieved successfully", total)
+	utils.CustomResponse(
+		c,
+		http.StatusOK,
+		true,
+		"Invoice-based financial stats (price-level merged)",
+		final,
+	)
 }
 
 func GetMonthlyStats(c *gin.Context) {
