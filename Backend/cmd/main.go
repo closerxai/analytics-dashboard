@@ -3,6 +3,7 @@ package main
 import (
 	"backend/closerx"
 	"backend/dashboard"
+	"backend/infra"
 	"backend/maya"
 	"backend/snowie"
 
@@ -37,6 +38,6 @@ func main() {
 	snowieGroup.GET("/financials", snowie.GetFinancialStats)
 	snowieGroup.GET("/financials/graph", snowie.GetMonthlyStats)
 	router.GET("/api/health",dashboard.HealthCheckAll)
-	router.GET("/api/aws_billing",dashboard.GetAWSBilling)
+	router.GET("/api/aws_billing",infra.AWSBillingAPI)
 	router.Run(":8080")
 }
