@@ -1,15 +1,53 @@
-'use client';
+"use client";
 
-import { PageHeader } from '@/components/analytics/page-header';
-import { MetricCard } from '@/components/analytics/metric-card';
-import { KPIGrid } from '@/components/analytics/kpi-grid';
-import { HealthCircle } from '@/components/analytics/health-circle';
-import { LineAreaChart } from '@/components/analytics/line-area-chart';
-import { globalOverviewData } from '@/lib/mock-data';
-import { Users, DollarSign, Zap, Server, Phone } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from "@/components/analytics/page-header";
+import { MetricCard } from "@/components/analytics/metric-card";
+import { KPIGrid } from "@/components/analytics/kpi-grid";
+import { HealthCircle } from "@/components/analytics/health-circle";
+import { LineAreaChart } from "@/components/analytics/line-area-chart";
+import { globalOverviewData } from "@/lib/mock-data";
+import {
+  Users,
+  DollarSign,
+  Zap,
+  Server,
+  Phone,
+  AlertCircle,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useHealthCheck } from "@/hooks/dashboard";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+
+type PlatformHealth = {
+  name: string;
+  status: "healthy" | "partial" | "down";
+}[];
 
 export default function GlobalOverview() {
+  const { data: healthData, isLoading, isError } = useHealthCheck();
+
+  const platformHealth = healthData
+    ? ([
+        {
+          name: "CloserX",
+          status: healthData.closerx ? "healthy" : "down",
+        },
+        {
+          name: "Snowie",
+          status: healthData.snowie ? "healthy" : "down",
+        },
+        {
+          name: "Maya",
+          status: Object.values(healthData.maya).every(Boolean)
+            ? "healthy"
+            : Object.values(healthData.maya).some(Boolean)
+            ? "partial"
+            : "down",
+        },
+      ] as PlatformHealth)
+    : [];
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -47,15 +85,35 @@ export default function GlobalOverview() {
 
       <div>
         <h2 className="mb-4 text-xl font-semibold">System Health</h2>
-        <div className="flex flex-wrap gap-8">
-          {globalOverviewData.platformHealth.map((platform) => (
-            <HealthCircle
-              key={platform.name}
-              name={platform.name}
-              status={platform.status}
-            />
-          ))}
-        </div>
+
+        {isLoading && (
+          <div className="flex flex-wrap gap-8">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-32 w-32 rounded-full" />
+            ))}
+          </div>
+        )}
+
+        {isError && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              Failed to load system health status.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {!isLoading && !isError && platformHealth.length > 0 && (
+          <div className="flex flex-wrap gap-8">
+            {platformHealth.map((platform) => (
+              <HealthCircle
+                key={platform.name}
+                name={platform.name}
+                status={platform.status}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       <div>
