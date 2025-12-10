@@ -2,12 +2,13 @@ package main
 
 import (
 	"backend/closerx"
+	"backend/dashboard"
 	"backend/maya"
 	"backend/snowie"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/gin-contrib/cors"
 )
 
 func main() {
@@ -35,6 +36,7 @@ func main() {
 	snowieGroup := router.Group("/api/snowie")
 	snowieGroup.GET("/financials", snowie.GetFinancialStats)
 	snowieGroup.GET("/financials/graph", snowie.GetMonthlyStats)
-
+	router.GET("/api/health",dashboard.HealthCheckAll)
+	router.GET("/api/aws_billing",dashboard.GetAWSBilling)
 	router.Run(":8080")
 }

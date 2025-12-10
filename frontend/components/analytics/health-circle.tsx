@@ -9,17 +9,18 @@ import {
 
 interface HealthCircleProps {
   name: string;
-  status: 'operational' | 'down';
-}
+status: "healthy" | "down" | "partial"}
 
 export function HealthCircle({ name, status }: HealthCircleProps) {
   const statusColors = {
-    operational: 'bg-green-500 shadow-green-500/50',
+    healthy: 'bg-green-500 shadow-green-500/50',
+    partial: 'bg-yellow-500 shadow-yellow-500/50',
     down: 'bg-red-500 shadow-red-500/50'
   };
 
   const statusMessages = {
-    operational: 'All systems operational',
+    healthy: 'All systems operational',
+    partial: 'Some systems operational',
     down: 'Service down'
   };
 
