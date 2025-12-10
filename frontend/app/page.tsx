@@ -3,7 +3,7 @@
 import { PageHeader } from "@/components/analytics/page-header";
 import { MetricCard } from "@/components/analytics/metric-card";
 import { KPIGrid } from "@/components/analytics/kpi-grid";
-import { HealthCircle } from "@/components/analytics/health-circle";
+import { SystemHealth } from "@/components/analytics/system-health";
 import { LineAreaChart } from "@/components/analytics/line-area-chart";
 import { globalOverviewData } from "@/lib/mock-data";
 import {
@@ -83,38 +83,11 @@ export default function GlobalOverview() {
         />
       </KPIGrid>
 
-      <div>
-        <h2 className="mb-4 text-xl font-semibold">System Health</h2>
+      {!isLoading && !isError && healthData && (
+        <SystemHealth data={healthData} />
+      )}
 
-        {isLoading && (
-          <div className="flex flex-wrap gap-8">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} className="h-32 w-32 rounded-full" />
-            ))}
-          </div>
-        )}
 
-        {isError && (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Failed to load system health status.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {!isLoading && !isError && platformHealth.length > 0 && (
-          <div className="flex flex-wrap gap-8">
-            {platformHealth.map((platform) => (
-              <HealthCircle
-                key={platform.name}
-                name={platform.name}
-                status={platform.status}
-              />
-            ))}
-          </div>
-        )}
-      </div>
 
       <div>
         <h2 className="mb-4 text-xl font-semibold">Company Quick Stats</h2>

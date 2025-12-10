@@ -29,20 +29,20 @@ type HealthResponse struct {
 // ────────────────────────────────────────────
 
 var Platforms = []Platform{
-	{Name: "closerx", URL: "https://app.closerx.ai/api/health/"},
-	{Name: "snowie", URL: "https://app.snowie.ai/api/health/"},
+	{Name: "closerx", URL: "https://app.closerx.ai/api/health"},
+	{Name: "snowie", URL: "https://app.snowie.ai/api/health"},
 	{Name: "maya", URL: ""}, // handled separately
 }
 
 var MayaServices = []Microservice{
-	{Name: "agentservice", URL: "https://maya.ravan.ai/agentservice/health"},
-	{Name: "authservice", URL: "https://maya.ravan.ai/authservice/health"},
-	{Name: "communicationsservice", URL: "https://maya.ravan.ai/communicationsservice/health"},
-	{Name: "crmservice", URL: "https://maya.ravan.ai/crmservice/health"},
-	{Name: "deviceservice", URL: "https://maya.ravan.ai/deviceservice/health"},
-	{Name: "productivityservice", URL: "https://maya.ravan.ai/productivityservice/health"},
-	{Name: "scraperservice", URL: "https://maya.ravan.ai/scraperservice/health"},
-	{Name: "thunderservice", URL: "https://maya.ravan.ai/thunderservice/health"},
+	{Name: "agentservice", URL: "https://maya.ravan.ai/api/agentservice/health"},
+	{Name: "authservice", URL: "https://maya.ravan.ai/api/authservice/health"},
+	{Name: "communicationsservice", URL: "https://maya.ravan.ai/api/communicationsservice/health"},
+	{Name: "crmservice", URL: "https://maya.ravan.ai/api/crmservice/health"},
+	{Name: "deviceservice", URL: "https://maya.ravan.ai/api/deviceservice/health"},
+	{Name: "productivityservice", URL: "https://maya.ravan.ai/api/productivityservice/health"},
+	{Name: "scraperservice", URL: "https://maya.ravan.ai/api/scraperservice/health"},
+	{Name: "thunderservice", URL: "https://maya.ravan.ai/api/thunderservice/health"},
 }
 
 // ────────────────────────────────────────────

@@ -32,6 +32,16 @@ func GetFinancialStats(c *gin.Context) {
 		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
 	}
 
+	cacheKey := "snowie_financials:" + startDate + ":" + endDate
+	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
+		var data stripeclient.IAResponse
+		if err := json.Unmarshal([]byte(cached), &data); err == nil {
+			log.Printf("[Snowie] Financials cache HIT (%s)", cacheKey)
+			utils.CustomResponse(c, http.StatusOK, true, "Invoice-based financial stats (cached)", data)
+			return
+		}
+	}
+	log.Printf("[Snowie] Financials cache MISS (%s)", cacheKey)
 	log.Printf("[Snowie] IA request | %s → %s", startDate, endDate)
 
 	keys := []string{
@@ -87,12 +97,21 @@ func GetFinancialStats(c *gin.Context) {
 		merge(final.Others, res.ia.Others)
 	}
 
+	formatted := stripeclient.FormatIAResponse(final)
+
+	// -------------------------------
+	// ✅ CACHE SAVE (5 minutes)
+	// -------------------------------
+	if b, err := json.Marshal(formatted); err == nil {
+		_ = utils.Set(cacheKey, b, 5*time.Minute)
+	}
+
 	utils.CustomResponse(
 		c,
 		http.StatusOK,
 		true,
 		"Invoice-based financial stats (price-level merged)",
-		final,
+		formatted,
 	)
 }
 

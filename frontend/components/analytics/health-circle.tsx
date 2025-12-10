@@ -11,34 +11,45 @@ interface HealthCircleProps {
   name: string;
 status: "healthy" | "down" | "partial"}
 
-export function HealthCircle({ name, status }: HealthCircleProps) {
-  const statusColors = {
-    healthy: 'bg-green-500 shadow-green-500/50',
-    partial: 'bg-yellow-500 shadow-yellow-500/50',
-    down: 'bg-red-500 shadow-red-500/50'
-  };
+function HealthCircle({
+  label,
+  status,
+  size = "lg",
+}: {
+  label: string;
+  status: "healthy" | "down" | "partial";
+  size?: "lg" | "sm" | "xsm";
+}) {
+  const color =
+    status === "healthy"
+      ? "bg-green-500/90 shadow-green-500/40"
+      : status === "partial"
+      ? "bg-yellow-500/90 shadow-yellow-500/40"
+      : "bg-red-500/90 shadow-red-500/40";
 
-  const statusMessages = {
-    healthy: 'All systems operational',
-    partial: 'Some systems operational',
-    down: 'Service down'
-  };
+  const dims =
+    size === "lg"
+      ? "w-28 h-28 text-lg"
+      : size === "xsm"
+      ? "w-16 h-16 text-[9px]"
+      : "w-20 h-20 text-[10px]";
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            className={`flex h-32 w-32 cursor-pointer items-center justify-center rounded-full border-4 border-background ${statusColors[status]} shadow-lg transition-all hover:scale-105`}
-          >
-            <span className="text-base font-semibold text-white">{name}</span>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p className="font-medium">{name}</p>
-          <p className="text-sm text-muted-foreground">{statusMessages[status]}</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <div
+      className={`flex items-center justify-center rounded-full text-white shadow-lg ${dims} ${color}`}
+    >
+      <span
+        className="
+          text-center
+          leading-tight
+          font-medium
+          px-1
+          line-clamp-2
+          break-words
+        "
+      >
+        {label}
+      </span>
+    </div>
   );
 }

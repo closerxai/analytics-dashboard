@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { formatUSD } from "@/lib/utils";
 
 type Metric = {
@@ -27,123 +28,124 @@ type FinancialData = {
   others: Section;
 };
 
-function Row({
+function MetricCard({
+  title,
+  metric,
+}: {
+  title: string;
+  metric: Metric;
+}) {
+  return (
+    <div className="flex-1 rounded-lg bg-white/10 backdrop-blur-md p-4">
+      <div className="text-xs text-muted-foreground">{title}</div>
+      <div className="text-lg font-semibold">{formatUSD(metric.total)}</div>
+      <div className="text-xs text-muted-foreground">
+        {metric.count} tx
+      </div>
+    </div>
+  );
+}
+
+function MetricRow({
   label,
   metrics,
   level = 0,
-  expandable = false,
   children,
 }: {
   label: string;
   metrics: Metrics;
   level?: number;
-  expandable?: boolean;
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <>
-      <tr
-        className="cursor-pointer hover:bg-muted"
-        onClick={() => expandable && setOpen(!open)}
+    <div className={level > 0 ? "ml-6 mt-3" : "mt-4"}>
+      {/* ROW */}
+      <div
+        onClick={() => setOpen(!open)}
+        className="cursor-pointer rounded-xl border bg-white/5 hover:bg-white/10 transition p-4"
       >
-        <td className="py-2 pl-4" style={{ paddingLeft: level * 20 }}>
-          {expandable && (
-            <span className="mr-2 text-xs">{open ? "▼" : "▶"}</span>
-          )}
-          {label}
-        </td>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2 font-medium">
+            {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            {label}
+          </div>
+        </div>
 
-        <td>{formatUSD(metrics.revenue.total)}</td>
-        <td>{formatUSD(metrics.refunded.total)}</td>
-        <td>{formatUSD(metrics.disputed.total)}</td>
-        <td className="font-medium">
-          {formatUSD(metrics.profit.total)}
-        </td>
-      </tr>
+        <div className="flex gap-3">
+          <MetricCard title="Revenue" metric={metrics.revenue} />
+          <MetricCard title="Disputed" metric={metrics.disputed} />
+          <MetricCard title="Refunded" metric={metrics.refunded} />
+          <MetricCard title="Profit" metric={metrics.profit} />
+        </div>
+      </div>
 
-      {open && children}
-    </>
+      {/* CHILDREN */}
+      {open && <div>{children}</div>}
+    </div>
   );
 }
 
-export function FinancialBreakdownTable({ data }: { data: FinancialData }) {
+export function FinancialBreakdownCards({
+  data,
+}: {
+  data: FinancialData;
+}) {
   return (
-    <div className="rounded-md border overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-muted">
-          <tr>
-            <th className="text-left p-3">Category</th>
-            <th>Revenue</th>
-            <th>Refunded</th>
-            <th>Disputed</th>
-            <th>Profit</th>
-          </tr>
-        </thead>
+    <div>
+      <MetricRow label="Total" metrics={data.total}>
+        <MetricRow
+          label="Subscriptions"
+          metrics={data.subscriptions.total}
+          level={1}
+        >
+          {Object.entries(data.subscriptions.prices).map(
+            ([price, metrics]) => (
+              <MetricRow
+                key={price}
+                label={`$${price}`}
+                metrics={metrics}
+                level={2}
+              />
+            )
+          )}
+        </MetricRow>
 
-        <tbody>
-          {/* TOTAL */}
-          <Row label="Total" metrics={data.total} expandable>
-            {/* Subscriptions */}
-            <Row
-              label="Subscriptions"
-              metrics={data.subscriptions.total}
-              level={1}
-              expandable
-            >
-              {Object.entries(data.subscriptions.prices).map(
-                ([price, metrics]) => (
-                  <Row
-                    key={price}
-                    label={`$${price}`}
-                    metrics={metrics}
-                    level={2}
-                  />
-                )
-              )}
-            </Row>
+        <MetricRow
+          label="Credits"
+          metrics={data.credits.total}
+          level={1}
+        >
+          {Object.entries(data.credits.prices).map(
+            ([price, metrics]) => (
+              <MetricRow
+                key={price}
+                label={`$${price}`}
+                metrics={metrics}
+                level={2}
+              />
+            )
+          )}
+        </MetricRow>
 
-            {/* Credits */}
-            <Row
-              label="Credits"
-              metrics={data.credits.total}
-              level={1}
-              expandable
-            >
-              {Object.entries(data.credits.prices).map(
-                ([price, metrics]) => (
-                  <Row
-                    key={price}
-                    label={`$${price}`}
-                    metrics={metrics}
-                    level={2}
-                  />
-                )
-              )}
-            </Row>
-
-            {/* Others */}
-            <Row
-              label="Others"
-              metrics={data.others.total}
-              level={1}
-              expandable
-            >
-              {Object.entries(data.others.prices).map(
-                ([price, metrics]) => (
-                  <Row
-                    key={price}
-                    label={`$${price}`}
-                    metrics={metrics}
-                    level={2}
-                  />
-                )
-              )}
-            </Row>
-          </Row>
-        </tbody>
-      </table>
+        <MetricRow
+          label="Others"
+          metrics={data.others.total}
+          level={1}
+        >
+          {Object.entries(data.others.prices).map(
+            ([price, metrics]) => (
+              <MetricRow
+                key={price}
+                label={`$${price}`}
+                metrics={metrics}
+                level={2}
+              />
+            )
+          )}
+        </MetricRow>
+      </MetricRow>
     </div>
   );
 }

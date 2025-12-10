@@ -24,6 +24,32 @@ func GetFinancialStats(c *gin.Context) {
 		startDate, endDate = utils.ApplyDefaultMonth(startDate, endDate)
 	}
 
+	// -------------------------------
+	// ✅ CACHE KEY
+	// -------------------------------
+	cacheKey := "closerx_financials:" + startDate + ":" + endDate
+
+	// -------------------------------
+	// ✅ CACHE HIT
+	// -------------------------------
+	if cached, err := utils.Get(cacheKey); err == nil && cached != "" {
+		var data stripeclient.IAResponse
+		if err := json.Unmarshal([]byte(cached), &data); err == nil {
+			log.Printf("[CloserX] Financials cache HIT (%s)", cacheKey)
+
+			utils.CustomResponse(
+				c,
+				http.StatusOK,
+				true,
+				"Invoice-based financial stats (cached)",
+				data,
+			)
+			return
+		}
+	}
+
+	log.Printf("[CloserX] Financials cache MISS (%s)", cacheKey)
+
 	keys := []string{
 		os.Getenv("CLOSERX_STRIPE_KEY_1"),
 		os.Getenv("CLOSERX_STRIPE_KEY_2"),
@@ -87,6 +113,13 @@ func GetFinancialStats(c *gin.Context) {
 	log.Printf("[CloserX] IA merged in %s", time.Since(start))
 
 	formatted := stripeclient.FormatIAResponse(final)
+
+	// -------------------------------
+	// ✅ CACHE SAVE (5 minutes)
+	// -------------------------------
+	if b, err := json.Marshal(formatted); err == nil {
+		_ = utils.Set(cacheKey, b, 5*time.Minute)
+	}
 
 	utils.CustomResponse(
 		c,
