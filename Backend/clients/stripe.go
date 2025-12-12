@@ -141,6 +141,7 @@ type Bucket struct {
 	Revenue  int64 // cents
 	Refunded int64
 	Disputes int64
+	DisputeCount int64
 	Profit   int64
 }
 
@@ -159,6 +160,7 @@ func initBucket(m map[string]*Bucket, key string) {
 func (c *Client) GetInvoiceBasedIA(startDate, endDate string) (*IAResult, error) {
 
 	stripe.Key = c.SecretKey
+	log.Printf("[Stripe] GetInvoiceBasedIA started for key %s | start=%s end=%s", c.SecretKey, startDate, endDate)
 
 	result := &IAResult{
 		Subscriptions: map[string]*Bucket{},
@@ -200,9 +202,8 @@ func (c *Client) GetInvoiceBasedIA(startDate, endDate string) (*IAResult, error)
 			desc := strings.ToLower(line.Description)
 
 			isSubscription := inv.BillingReason == stripe.InvoiceBillingReasonSubscriptionCycle &&
-								line.Pricing != nil &&
-								line.Pricing.PriceDetails != nil
-
+				line.Pricing != nil &&
+				line.Pricing.PriceDetails != nil
 
 			// ---- SUBSCRIPTIONS ----
 			if isSubscription {
@@ -273,35 +274,64 @@ func (c *Client) GetInvoiceBasedIA(startDate, endDate string) (*IAResult, error)
 	}
 
 	// -------------------------------------------------
-	// 3️⃣ DISPUTES (via Charges)
+	// 3️⃣ DISPUTES (only lost disputes)
 	// -------------------------------------------------
 	dp := &stripe.DisputeListParams{}
 	dp.Limit = stripe.Int64(1000)
 
 	if startDate != "" {
-		dp.CreatedRange = &stripe.RangeQueryParams{
-			GreaterThanOrEqual: parseTimestamp(startDate),
-		}
+		dp.Filters.AddFilter("created[gte]", "",
+			fmt.Sprintf("%d", parseTimestamp(startDate)))
 	}
 
-	iter := dispute.List(dp)
+	if endDate != "" {
+		dp.Filters.AddFilter("created[lte]", "",
+			fmt.Sprintf("%d", parseTimestamp(endDate)))
+	}
 
-	for iter.Next() {
-		d := iter.Dispute()
+	log.Print("[Stripe] Disputes parameters:", dp)
+	dIter := dispute.List(dp)
+	log.Print("[Stripe] Disputes found:", dIter)
+
+	for dIter.Next() {
+		d := dIter.Dispute()
+		fmt.Println("--------------------------------")
+		fmt.Println(d.ID, d.Status, d.Amount)
+
+		// only include disputes that were lost
+		if d.Status != stripe.DisputeStatusLost {
+			fmt.Println("Dispute not lost:", d.ID, d.Status, d.Amount)
+			continue
+		}
 
 		amount := d.Amount
+		fmt.Println("Dispute amount:", amount)
 		key := fmt.Sprintf("%.2f", float64(amount)/100)
+		fmt.Println("Dispute key:", key)
 
 		for _, section := range []map[string]*Bucket{
 			result.Subscriptions,
 			result.Credits,
 			result.Others,
 		} {
+			fmt.Println("Section:", section)
 			if b, ok := section[key]; ok {
+				fmt.Println("Bucket:", b)
+				fmt.Println("Adding to bucket:", amount)
+				fmt.Println("Existing disputes:", b.Disputes)
+				fmt.Println("Existing dispute count:", b.DisputeCount)
 				b.Disputes += amount
+				b.DisputeCount++
+				fmt.Println("New disputes:", b.Disputes)
+				fmt.Println("New dispute count:", b.DisputeCount)
 				break
 			}
 		}
+		fmt.Println("--------------------------------")
+	}
+
+	if err := dIter.Err(); err != nil {
+		return nil, err
 	}
 
 	// -------------------------------------------------
@@ -340,8 +370,8 @@ type PriceBreakdown struct {
 }
 
 type Section struct {
-	Total  Totals                         `json:"total"`
-	Prices map[string]PriceBreakdown      `json:"prices"`
+	Total  Totals                    `json:"total"`
+	Prices map[string]PriceBreakdown `json:"prices"`
 }
 
 type IAResponse struct {
@@ -350,7 +380,6 @@ type IAResponse struct {
 	Credits       Section `json:"credits"`
 	Others        Section `json:"others"`
 }
-
 
 func FormatIAResponse(ia *IAResult) IAResponse {
 
@@ -376,7 +405,7 @@ func FormatIAResponse(ia *IAResult) IAResponse {
 					Total: b.Refunded,
 				},
 				Disputed: Metric{
-					Count: utils.BoolToInt64(b.Disputes > 0),
+					Count: b.DisputeCount,
 					Total: b.Disputes,
 				},
 				Profit: Metric{

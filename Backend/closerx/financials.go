@@ -91,6 +91,7 @@ func GetFinancialStats(c *gin.Context) {
 			dst[price].Revenue += b.Revenue
 			dst[price].Refunded += b.Refunded
 			dst[price].Disputes += b.Disputes
+			dst[price].DisputeCount += b.DisputeCount
 			dst[price].Profit += b.Profit
 		}
 	}

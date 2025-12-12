@@ -7,6 +7,7 @@ export function QueryProvider({children}: {children: ReactNode}) {
         defaultOptions: {
             queries: {
                 refetchOnWindowFocus: true,
+                retry: false,
             },
         },
     }));
